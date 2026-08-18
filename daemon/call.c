@@ -2095,6 +2095,16 @@ static void __rtcp_mux_logic(sdp_ng_flags *flags, struct call_media *media,
 	}
 }
 
+static bool __dtls_handshake_in_progress(struct call_media *m) {
+	for (__auto_type l = m->streams.head; l; l = l->next) {
+		struct packet_stream *ps = l->data;
+		struct dtls_connection *d = dtls_ptr(ps->selected_sfd);
+		if (d && d->init && !d->connected)
+			return true;
+	}
+	return false;
+}
+
 static void __dtls_restart(struct call_media *m) {
 	struct packet_stream *ps;
 
@@ -2228,8 +2238,14 @@ static void __dtls_logic(const sdp_ng_flags *flags,
 	}
 	else if (other_media->tls_id.len && (sp->tls_id.len == 0 || str_cmp_str(&other_media->tls_id, &sp->tls_id))) {
 		// previously seen tls-id and new tls-id is different or not present
-		ilogs(crypto, LOG_INFO, "TLS-ID changed, restarting DTLS");
-		__dtls_restart(other_media);
+		if (MEDIA_ISSET(other_media, SETUP_PASSIVE) && !MEDIA_ISSET(other_media, SETUP_ACTIVE)
+				&& __dtls_handshake_in_progress(other_media)) {
+			// restarting would silently abort the in-progress handshake
+			ilogs(crypto, LOG_INFO, "TLS-ID changed, passive role, handshake in progress, not restarting DTLS");
+		} else {
+			ilogs(crypto, LOG_INFO, "TLS-ID changed, restarting DTLS");
+			__dtls_restart(other_media);
+		}
 	}
 	else if (ice_is_restart(other_media->ice_agent, sp) && !other_media->tls_id.len && !sp->tls_id.len) {
 		// Skip DTLS restart if no-tls-id flag is active (user opted out of TLS-ID handling)
